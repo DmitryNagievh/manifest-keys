@@ -1,1 +1,478 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ManifestTools — Key Panel</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body {
+    font-family:-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#0a0e18; color:#e0e6f0;
+    min-height:100vh; padding:12px;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(58,141,222,0.15) 0%, transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(255,60,200,0.1) 0%, transparent 50%),
+      #0a0e18;
+  }
+  .wrap { max-width:1100px; margin:0 auto; }
 
+  .login { max-width:380px; margin:40px auto; background:rgba(15,20,35,0.9);
+    border:1px solid rgba(58,141,222,0.5); border-radius:14px; padding:28px 22px;
+    box-shadow:0 0 40px rgba(58,141,222,0.3); }
+  .login h1 { color:#fff; font-size:22px; text-align:center; margin-bottom:4px; }
+  .login h1 span { color:#5ab0ff; }
+  .login .sub { text-align:center; color:#7aaee0; font-size:10px;
+    margin-bottom:22px; letter-spacing:1px; }
+  .login label { display:block; font-size:11px; color:#7aaee0;
+    margin-bottom:6px; text-transform:uppercase; }
+  .login input { width:100%; padding:12px 14px; background:rgba(10,15,25,0.7);
+    border:1.5px solid rgba(58,141,222,0.5); border-radius:8px;
+    color:#fff; font-size:14px; margin-bottom:14px; }
+  .login input:focus { outline:none; border-color:#5ab0ff; }
+  .login button { width:100%; padding:14px;
+    background:linear-gradient(90deg,#3a8dde,#5ab0ff);
+    border:none; border-radius:8px; color:#fff; font-size:14px;
+    font-weight:700; letter-spacing:1.5px; }
+  .login button:hover { box-shadow:0 0 25px rgba(90,176,255,0.8); }
+  .err { color:#ff5a5a; font-size:12px; text-align:center;
+    margin-bottom:10px; min-height:16px; }
+
+  .panel { display:none; }
+  .panel.show { display:block; }
+
+  .top { background:linear-gradient(90deg,rgba(13,27,46,0.95),rgba(26,58,92,0.9));
+    padding:14px 18px; border-radius:12px; margin-bottom:12px;
+    display:flex; justify-content:space-between; align-items:center;
+    flex-wrap:wrap; gap:10px; border:1px solid rgba(58,141,222,0.4); }
+  .top h1 { font-size:16px; }
+  .top h1 span { color:#5ab0ff; }
+  .user-info { display:flex; align-items:center; gap:10px; font-size:12px; }
+  .role { padding:3px 10px; border-radius:10px; font-size:10px;
+    font-weight:700; }
+  .role.admin { background:rgba(255,60,60,0.25); color:#ff7a7a;
+    border:1px solid #ff5a5a; }
+  .role.reseller { background:rgba(255,180,60,0.25); color:#ffb43c;
+    border:1px solid #ffb43c; }
+  .logout { padding:6px 14px; background:rgba(255,60,60,0.2);
+    border:1px solid rgba(255,90,90,0.6); border-radius:6px;
+    color:#ff7a7a; font-size:11px; cursor:pointer; }
+  .logout:hover { background:rgba(255,60,60,0.4); color:#fff; }
+
+  .tabs { display:flex; background:rgba(8,12,20,0.6);
+    border-radius:10px; margin-bottom:14px; overflow-x:auto;
+    border:1px solid rgba(58,141,222,0.3); }
+  .tab { flex:1; padding:12px 10px; color:#7aaee0; font-size:12px;
+    font-weight:600; text-align:center; white-space:nowrap;
+    border-bottom:2px solid transparent; cursor:pointer; }
+  .tab:hover { color:#fff; }
+  .tab.active { color:#5ab0ff; border-bottom-color:#5ab0ff; }
+
+  .section { display:none; background:rgba(15,20,35,0.9);
+    border:1px solid rgba(58,141,222,0.4); border-radius:12px; padding:18px; }
+  .section.active { display:block; }
+  .section h2 { font-size:14px; margin-bottom:14px; color:#fff; }
+
+  .form { display:flex; flex-direction:column; gap:10px;
+    background:rgba(10,15,25,0.5); border:1px solid rgba(58,141,222,0.3);
+    border-radius:10px; padding:14px; margin-bottom:16px; }
+  .field label { display:block; font-size:10px; color:#7aaee0;
+    margin-bottom:5px; text-transform:uppercase; }
+  .field input, .field select { width:100%; padding:11px 12px;
+    background:rgba(10,15,25,0.7); border:1.5px solid rgba(58,141,222,0.5);
+    border-radius:8px; color:#fff; font-size:14px; }
+  .field input:focus, .field select:focus { outline:none; border-color:#5ab0ff; }
+  .field select option { background:#0a0e18; }
+
+  .btn { padding:12px; background:linear-gradient(90deg,#3a8dde,#5ab0ff);
+    border:none; border-radius:8px; color:#fff; font-size:13px;
+    font-weight:700; letter-spacing:1px; width:100%; cursor:pointer; }
+  .btn:hover { box-shadow:0 0 20px rgba(90,176,255,0.7); }
+  .btn.danger { background:linear-gradient(90deg,#b02020,#ff5a5a); }
+  .btn.small { padding:7px 12px; font-size:11px; width:auto; }
+
+  .result { margin-top:12px; padding:12px;
+    background:rgba(58,141,222,0.1); border:1.5px solid rgba(58,141,222,0.5);
+    border-radius:10px; display:none; }
+  .result.show { display:block; }
+  .result .label { font-size:10px; color:#7aaee0; margin-bottom:8px; }
+  .keys { display:flex; flex-direction:column; gap:6px; }
+  .key-chip { padding:10px; background:rgba(10,15,25,0.8);
+    border:1px solid rgba(90,176,255,0.6); border-radius:6px;
+    color:#5ab0ff; font-family:'Courier New',monospace; font-size:12px;
+    font-weight:700; word-break:break-all; text-align:center; cursor:pointer; }
+  .key-chip:hover { background:rgba(58,141,222,0.3); color:#fff; }
+
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  table th { text-align:left; padding:10px 8px; background:rgba(8,12,20,0.7);
+    color:#7aaee0; font-size:10px; text-transform:uppercase; }
+  table td { padding:10px 8px; border-bottom:1px solid rgba(58,141,222,0.15);
+    color:#d0d8e8; word-break:break-all; }
+  table tr:hover td { background:rgba(58,141,222,0.08); }
+  .key-mono { font-family:'Courier New',monospace; color:#5ab0ff; font-weight:700; }
+  .status-active { color:#5ae08a; }
+  .status-used { color:#ff5a5a; }
+  .empty { text-align:center; padding:30px; color:#555; font-size:13px; }
+
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:16px; }
+  .stat { padding:14px; background:rgba(10,15,25,0.5);
+    border:1px solid rgba(58,141,222,0.3); border-radius:10px; text-align:center; }
+  .stat .num { font-size:22px; font-weight:700; color:#5ab0ff; }
+  .stat .lbl { font-size:9px; color:#7aaee0; margin-top:4px; text-transform:uppercase; }
+
+  .table-scroll { overflow-x:auto; }
+
+  @media (max-width:700px) {
+    .stats { grid-template-columns:1fr 1fr; }
+    table { font-size:11px; }
+    table th, table td { padding:8px 6px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <!-- LOGIN -->
+  <div class="login" id="login">
+    <h1>Manifest<span>Tools</span></h1>
+    <div class="sub">KEY MANAGEMENT PANEL</div>
+    <div class="err" id="err"></div>
+    <label>Логин</label>
+    <input type="text" id="username" placeholder="Manifest" autocomplete="off">
+    <label>Пароль</label>
+    <input type="password" id="password" placeholder="••••••••">
+    <button onclick="doLogin()">ВОЙТИ</button>
+  </div>
+
+  <!-- PANEL -->
+  <div class="panel" id="panel">
+    <div class="top">
+      <h1>Manifest<span>Tools</span> · Key Panel</h1>
+      <div class="user-info">
+        <span id="whoami">—</span>
+        <span class="role" id="roleBadge">—</span>
+        <button class="logout" onclick="doLogout()">ВЫЙТИ</button>
+      </div>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <div class="tab active" data-tab="dashboard">DASHBOARD</div>
+      <div class="tab" data-tab="gen">ГЕНЕРАТОР</div>
+      <div class="tab" data-tab="keys">КЛЮЧИ</div>
+      <div class="tab admin-only" data-tab="resellers">РЕСЕЛЛЕРЫ</div>
+    </div>
+
+    <div class="section active" id="dashboard">
+      <h2>Общая статистика</h2>
+      <div class="stats">
+        <div class="stat"><div class="num" id="statKeys">0</div><div class="lbl">Всего ключей</div></div>
+        <div class="stat"><div class="num" id="statActive">0</div><div class="lbl">Активных</div></div>
+        <div class="stat"><div class="num" id="statUsed">0</div><div class="lbl">Использованных</div></div>
+        <div class="stat"><div class="num" id="statResellers">0</div><div class="lbl">Реселлеров</div></div>
+      </div>
+      <div id="byOwnerBox" style="display:none">
+        <h2 style="margin-top:20px">Кто сколько сделал ключей</h2>
+        <div class="table-scroll" id="byOwnerTable"></div>
+      </div>
+    </div>
+
+    <div class="section" id="gen">
+      <h2>Генератор ключей</h2>
+      <div class="form">
+        <div class="field">
+          <label>Количество</label>
+          <input type="number" id="genCount" value="1" min="1" max="200">
+        </div>
+        <div class="field">
+          <label>Длительность</label>
+          <select id="genDuration">
+            <option value="1 день">1 день</option>
+            <option value="3 дня">3 дня</option>
+            <option value="7 дней" selected>7 дней</option>
+            <option value="14 дней">14 дней</option>
+            <option value="30 дней">30 дней</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Тариф</label>
+          <select id="genTier">
+            <option value="basic">Basic</option>
+            <option value="pro">Pro</option>
+            <option value="vip" selected>VIP</option>
+          </select>
+        </div>
+        <button class="btn" onclick="generateKeys()">СГЕНЕРИРОВАТЬ</button>
+      </div>
+      <div class="result" id="genResult">
+        <div class="label">Нажми на ключ — скопируется</div>
+        <div class="keys" id="genKeys"></div>
+      </div>
+    </div>
+
+    <div class="section" id="keys">
+      <h2>Все ключи</h2>
+      <div class="table-scroll" id="keysTable"></div>
+    </div>
+
+    <div class="section" id="resellers">
+      <h2>Создать реселлера</h2>
+      <div class="form">
+        <div class="field"><label>Логин</label>
+          <input type="text" id="resUser" placeholder="reseller1"></div>
+        <div class="field"><label>Пароль</label>
+          <input type="text" id="resPass" placeholder="pass123"></div>
+        <div class="field"><label>Лимит ключей</label>
+          <input type="number" id="resLimit" value="50" min="1"></div>
+        <button class="btn" onclick="createReseller()">СОЗДАТЬ</button>
+      </div>
+      <h2 style="margin-top:18px">Список реселлеров</h2>
+      <div class="table-scroll" id="resellersTable"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const API = '';
+  let currentUser = null;
+
+  async function doLogin() {
+    const u = document.getElementById('username').value.trim();
+    const p = document.getElementById('password').value;
+    const err = document.getElementById('err');
+    err.textContent = '';
+    if (!u || !p) { err.textContent = 'Введите логин и пароль'; return; }
+
+    try {
+      const r = await fetch(API + '/api/login', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ username:u, password:p })
+      });
+      const d = await r.json();
+      if (!r.ok) { err.textContent = d.error || 'Ошибка'; return; }
+      currentUser = d;
+      showPanel();
+    } catch { err.textContent = 'Сервер недоступен'; }
+  }
+
+  function showPanel() {
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('panel').classList.add('show');
+    document.getElementById('whoami').textContent = currentUser.user;
+    const b = document.getElementById('roleBadge');
+    b.textContent = currentUser.role.toUpperCase();
+    b.className = 'role ' + currentUser.role;
+    document.querySelectorAll('.admin-only').forEach(t => {
+      t.style.display = currentUser.role === 'admin' ? '' : 'none';
+    });
+    refreshAll();
+  }
+
+  function doLogout() {
+    currentUser = null;
+    document.getElementById('panel').classList.remove('show');
+    document.getElementById('login').style.display = '';
+    document.getElementById('username').value = '';
+    document.getElementById('password').value = '';
+    document.getElementById('err').textContent = '';
+  }
+
+  document.querySelectorAll('#tabs .tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      if (tab.style.display === 'none') return;
+      document.querySelectorAll('#tabs .tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(tab.dataset.tab).classList.add('active');
+      refreshAll();
+    });
+  });
+
+  async function generateKeys() {
+    const count    = +document.getElementById('genCount').value || 1;
+    const duration = document.getElementById('genDuration').value;
+    const tier     = document.getElementById('genTier').value;
+
+    const r = await fetch(API + '/api/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ username: currentUser.user, count, duration, tier })
+    });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error); return; }
+    showGenResult(d.keys);
+    refreshAll();
+  }
+
+  function showGenResult(keys) {
+    const res = document.getElementById('genResult');
+    const box = document.getElementById('genKeys');
+    box.innerHTML = '';
+    keys.forEach(k => {
+      const c = document.createElement('div');
+      c.className = 'key-chip';
+      c.textContent = k;
+      c.onclick = () => {
+        navigator.clipboard.writeText(k);
+        const old = c.textContent;
+        c.textContent = '✓ Скопировано';
+        setTimeout(() => c.textContent = old, 1000);
+      };
+      box.appendChild(c);
+    });
+    res.classList.add('show');
+  }
+
+  async function createReseller() {
+    const resellerUser = document.getElementById('resUser').value.trim();
+    const resellerPass = document.getElementById('resPass').value;
+    const limit = +document.getElementById('resLimit').value || 50;
+
+    const r = await fetch(API + '/api/resellers', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        adminUser: currentUser.user, resellerUser, resellerPass, limit
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error); return; }
+    document.getElementById('resUser').value = '';
+    document.getElementById('resPass').value = '';
+    refreshAll();
+    alert('Реселлер создан: ' + resellerUser);
+  }
+
+  async function toggleReseller(u) {
+    await fetch(API + '/api/resellers/toggle', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ adminUser: currentUser.user, target: u })
+    });
+    refreshAll();
+  }
+
+  async function deleteReseller(u) {
+    if (!confirm('Удалить ' + u + '?')) return;
+    await fetch(API + '/api/resellers/delete', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ adminUser: currentUser.user, target: u })
+    });
+    refreshAll();
+  }
+
+  async function refreshAll() {
+    if (!currentUser) return;
+    await renderStats();
+    await renderKeys();
+    if (currentUser.role === 'admin') await renderResellers();
+  }
+
+  async function renderStats() {
+    const r = await fetch(API + '/api/stats?username=' + encodeURIComponent(currentUser.user));
+    const d = await r.json();
+    if (!r.ok) return;
+
+    document.getElementById('statKeys').textContent = d.total;
+    document.getElementById('statActive').textContent = d.active;
+    document.getElementById('statUsed').textContent = d.used;
+    document.getElementById('statResellers').textContent =
+      currentUser.role === 'admin' ? d.resellers : '—';
+
+    const box = document.getElementById('byOwnerBox');
+    const tbl = document.getElementById('byOwnerTable');
+
+    if (currentUser.role === 'admin' && d.byOwner && d.byOwner.length) {
+      box.style.display = 'block';
+      let h = `<table><thead><tr>
+        <th>Владелец</th><th>Всего</th><th>Акт.</th><th>Исп.</th>
+      </tr></thead><tbody>`;
+      d.byOwner.forEach(o => {
+        h += `<tr>
+          <td><b>${o.owner}</b></td>
+          <td>${o.count}</td>
+          <td class="status-active">${o.active}</td>
+          <td class="status-used">${o.used}</td>
+        </tr>`;
+      });
+      h += '</tbody></table>';
+      tbl.innerHTML = h;
+    } else {
+      box.style.display = 'none';
+    }
+  }
+
+  async function renderKeys() {
+    const r = await fetch(API + '/api/keys?username=' + encodeURIComponent(currentUser.user));
+    const keys = await r.json();
+    const box = document.getElementById('keysTable');
+
+    if (!keys.length) {
+      box.innerHTML = '<div class="empty">Ключей пока нет</div>';
+      return;
+    }
+
+    let h = `<table><thead><tr>
+      <th>Ключ</th><th>Тариф</th><th>Срок</th><th>Владелец</th>
+      <th>Статус</th><th>Создан</th>
+    </tr></thead><tbody>`;
+
+    keys.forEach(k => {
+      const created = new Date(+k.created).toLocaleString('ru-RU');
+      const status = k.used
+        ? '<span class="status-used">Использован</span>'
+        : '<span class="status-active">Активен</span>';
+      h += `<tr>
+        <td class="key-mono">${k.key_value}</td>
+        <td>${(k.tier||'').toUpperCase()}</td>
+        <td>${k.duration}</td>
+        <td>${k.owner}</td>
+        <td>${status}</td>
+        <td>${created}</td>
+      </tr>`;
+    });
+    h += '</tbody></table>';
+    box.innerHTML = h;
+  }
+
+  async function renderResellers() {
+    const r = await fetch(API + '/api/resellers?username=' + encodeURIComponent(currentUser.user));
+    const list = await r.json();
+    const box = document.getElementById('resellersTable');
+
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">Реселлеров нет</div>';
+      return;
+    }
+
+    let h = `<table><thead><tr>
+      <th>Логин</th><th>Пароль</th><th>Лимит</th>
+      <th>Создано</th><th>Статус</th><th>Действия</th>
+    </tr></thead><tbody>`;
+
+    list.forEach(rr => {
+      h += `<tr>
+        <td><b>${rr.username}</b></td>
+        <td class="key-mono">${rr.password}</td>
+        <td>${rr.limit_keys}</td>
+        <td>${rr.key_count}</td>
+        <td>${rr.active
+          ? '<span class="status-active">Активен</span>'
+          : '<span class="status-used">Отключён</span>'}</td>
+        <td>
+          <button class="btn small" onclick="toggleReseller('${rr.username}')">
+            ${rr.active ? 'Откл' : 'Вкл'}
+          </button>
+          <button class="btn small danger" onclick="deleteReseller('${rr.username}')">Удал</button>
+        </td>
+      </tr>`;
+    });
+    h += '</tbody></table>';
+    box.innerHTML = h;
+  }
+
+  document.getElementById('password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+</script>
+
+</body>
+  </html>
