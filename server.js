@@ -86,24 +86,43 @@ app.post('/api/login', async (req, res) => {
 // ============================================================
 // ГЕНЕРАЦИЯ
 // ============================================================
-function cleanPrefix(p) {
-  if (!p) return 'MT';
-  let s = String(p).replace(/[^A-Za-z0-9_\-]/g, '');
-  if (s.length === 0) s = 'MT';
-  if (s.length > 20) s = s.slice(0, 20);
-  return s;
+// Срок → код для ключа
+const DURATION_CODE = {
+  '1 день':   '1d',
+  '3 дня':    '3d',
+  '7 дней':   '7d',
+  '14 дней':  '14d',
+  '30 дней':  '30d'
+};
+
+// 10 случайных символов (строчные буквы + цифры)
+function randomPart(len) {
+  const c = 'abcdefghjkmnpqrstuvwxyz23456789';
+  return Array.from({ length: len }, () =>
+    c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-function randomKey(prefix) {
-  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const s = () => Array.from({ length: 5 }, () =>
-    c[Math.floor(Math.random() * c.length)]).join('');
-  return `${prefix}-${s()}-${s()}-${s()}`;
+// Генерированный ключ: MT-{код}-{10 символов}
+function makeKeyByDuration(duration) {
+  const code = DURATION_CODE[duration] || '7d';
+  return `MT-${code}-${randomPart(10)}`;
+}
+
+// Свой ключ — берём как ввёл пользователь
+// Разрешаем: A-Z a-z 0-9 _ - @ . (макс 60 символов)
+function cleanCustomKey(k) {
+  if (!k) return null;
+  let s = String(k).trim();
+  if (s.length === 0) return null;
+  s = s.replace(/[^A-Za-z0-9_\-@.]/g, '');
+  if (s.length === 0) return null;
+  if (s.length > 60) s = s.slice(0, 60);
+  return s;
 }
 
 app.post('/api/generate', async (req, res) => {
   try {
-    const { username, count, duration, tier, prefix } = req.body || {};
+    const { username, count, duration, tier, mode, customKey } = req.body || {};
     const ur = await pool.query('SELECT * FROM users WHERE username=$1', [username]);
     if (ur.rows.length === 0) return res.status(401).json({ error: 'Нет доступа' });
     const user = ur.rows[0];
@@ -112,7 +131,6 @@ app.post('/api/generate', async (req, res) => {
     const okD = ['1 день', '3 дня', '7 дней', '14 дней', '30 дней'];
     const dur = okD.includes(duration) ? duration : '7 дней';
     const tr  = ['basic', 'pro', 'vip'].includes(tier) ? tier : 'vip';
-    const pfx = cleanPrefix(prefix);
 
     if (user.role === 'reseller') {
       const cr = await pool.query('SELECT COUNT(*) AS c FROM keys WHERE owner=$1', [username]);
@@ -123,19 +141,39 @@ app.post('/api/generate', async (req, res) => {
     }
 
     const out = [];
-    for (let i = 0; i < cnt; i++) {
-      let k, ok = false, tries = 0;
-      while (!ok && tries < 20) {
-        k = randomKey(pfx);
-        const chk = await pool.query('SELECT id FROM keys WHERE key_value=$1', [k]);
-        if (chk.rows.length === 0) ok = true;
-        tries++;
-      }
+
+    // --- РЕЖИМ: СВОЙ КЛЮЧ ---
+    if (mode === 'custom') {
+      const base = cleanCustomKey(customKey);
+      if (!base) return res.status(400).json({ error: 'Введи свой ключ' });
+      if (cnt > 1) return res.status(400).json({ error: 'Свой ключ — только 1 штука за раз' });
+
+      const chk = await pool.query('SELECT id FROM keys WHERE key_value=$1', [base]);
+      if (chk.rows.length > 0) return res.status(400).json({ error: 'Такой ключ уже существует' });
+
       await pool.query(
         'INSERT INTO keys (key_value, duration, tier, owner, created) VALUES ($1,$2,$3,$4,$5)',
-        [k, dur, tr, username, Date.now()]
+        [base, dur, tr, username, Date.now()]
       );
-      out.push(k);
+      out.push(base);
+    }
+
+    // --- РЕЖИМ: ГЕНЕРИРОВАННЫЙ ---
+    else {
+      for (let i = 0; i < cnt; i++) {
+        let k, ok = false, tries = 0;
+        while (!ok && tries < 20) {
+          k = makeKeyByDuration(dur);
+          const chk = await pool.query('SELECT id FROM keys WHERE key_value=$1', [k]);
+          if (chk.rows.length === 0) ok = true;
+          tries++;
+        }
+        await pool.query(
+          'INSERT INTO keys (key_value, duration, tier, owner, created) VALUES ($1,$2,$3,$4,$5)',
+          [k, dur, tr, username, Date.now()]
+        );
+        out.push(k);
+      }
     }
 
     res.json({ keys: out });
