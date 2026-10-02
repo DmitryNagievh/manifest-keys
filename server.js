@@ -1,7 +1,7 @@
 // ============================================================
 // ManifestTools — Key Server (PostgreSQL)
 // Rocket Way // 20.05.2026
-// Login: Manifest / mama22112012
+// Login:  / 
 // ============================================================
 
 const express = require('express');
