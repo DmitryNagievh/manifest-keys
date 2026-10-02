@@ -1,4 +1,4 @@
- <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
@@ -17,7 +17,6 @@
   }
   .wrap { max-width:1100px; margin:0 auto; }
 
-  /* LOGIN */
   .login { max-width:400px; margin:60px auto; background:rgba(15,20,35,0.85);
     border:1px solid rgba(58,141,222,0.5); border-radius:14px; padding:32px 24px;
     box-shadow:0 0 40px rgba(58,141,222,0.3); }
@@ -84,6 +83,22 @@
     box-shadow:0 0 12px rgba(90,176,255,0.3); }
   .field select option { background:#0a0e18; }
 
+  /* Переключатель режима */
+  .mode-switch {
+    display:flex; gap:8px; margin-bottom:4px;
+  }
+  .mode-btn {
+    flex:1; padding:12px; text-align:center; cursor:pointer;
+    background:rgba(10,15,25,0.7); border:1.5px solid rgba(58,141,222,0.4);
+    border-radius:8px; color:#7aaee0; font-size:12px; font-weight:600;
+    letter-spacing:1px; transition:all 0.2s;
+  }
+  .mode-btn:hover { color:#fff; border-color:rgba(58,141,222,0.8); }
+  .mode-btn.active {
+    background:rgba(58,141,222,0.25); color:#5ab0ff;
+    border-color:#5ab0ff; box-shadow:0 0 12px rgba(90,176,255,0.4);
+  }
+
   .btn { padding:13px; background:linear-gradient(90deg,#3a8dde,#5ab0ff);
     border:none; border-radius:8px; color:#fff; font-size:13px;
     font-weight:700; letter-spacing:1px; width:100%; cursor:pointer; }
@@ -121,8 +136,7 @@
   .stat .lbl { font-size:9px; color:#7aaee0; margin-top:4px; text-transform:uppercase; }
 
   .table-scroll { overflow-x:auto; }
-
-  .hint { font-size:10px; color:#7aaee0; margin-top:-6px; margin-bottom:8px; }
+  .hint { font-size:10px; color:#7aaee0; margin-top:6px; }
 
   @media (max-width:700px) {
     .stats { grid-template-columns:1fr 1fr; }
@@ -135,19 +149,17 @@
 
 <div class="wrap">
 
-  <!-- LOGIN -->
   <div class="login" id="login">
     <h1>Manifest<span>Tools</span></h1>
     <div class="sub">KEY MANAGEMENT PANEL</div>
     <div class="err" id="err"></div>
     <label>Логин</label>
-    <input type="text" id="username" placeholder="" autocomplete="off">
+    <input type="text" id="username" autocomplete="off">
     <label>Пароль</label>
-    <input type="password" id="password" placeholder="">
+    <input type="password" id="password">
     <button onclick="doLogin()">ВОЙТИ</button>
   </div>
 
-  <!-- PANEL -->
   <div class="panel" id="panel">
     <div class="top">
       <h1>Manifest<span>Tools</span> · Key Panel</h1>
@@ -181,16 +193,27 @@
 
     <div class="section" id="gen">
       <h2>Генератор ключей</h2>
+
+      <!-- Переключатель режима -->
+      <div class="mode-switch">
+        <div class="mode-btn active" id="modeAuto" onclick="setMode('auto')">ГЕНЕРИРОВАННЫЙ</div>
+        <div class="mode-btn" id="modeCustom" onclick="setMode('custom')">СВОЙ КЛЮЧ</div>
+      </div>
+
       <div class="form">
-        <div class="field">
-          <label>Префикс ключа</label>
-          <input type="text" id="genPrefix" value="HappyMT" placeholder="HappyMT" maxlength="20">
-          <div class="hint">Пример: HappyMT → HappyMT-XXXXX-XXXXX-XXXXX</div>
-        </div>
-        <div class="field">
+        <!-- Поле для генерированного режима: количество -->
+        <div class="field" id="fieldCount">
           <label>Количество</label>
           <input type="number" id="genCount" value="1" min="1" max="200">
         </div>
+
+        <!-- Поле для своего ключа -->
+        <div class="field" id="fieldCustom" style="display:none">
+          <label>Свой ключ</label>
+          <input type="text" id="genCustom" placeholder="@Minefast или HappyBithday" maxlength="60">
+          <div class="hint">Можно: буквы, цифры, @ _ - . (макс 60 симв.)</div>
+        </div>
+
         <div class="field">
           <label>Длительность</label>
           <select id="genDuration">
@@ -201,6 +224,7 @@
             <option value="30 дней">30 дней</option>
           </select>
         </div>
+
         <div class="field">
           <label>Тариф</label>
           <select id="genTier">
@@ -209,8 +233,10 @@
             <option value="vip" selected>VIP</option>
           </select>
         </div>
+
         <button class="btn" onclick="generateKeys()">СГЕНЕРИРОВАТЬ</button>
       </div>
+
       <div class="result" id="genResult">
         <div class="label">Нажми на ключ — скопируется</div>
         <div class="keys" id="genKeys"></div>
@@ -243,6 +269,15 @@
 <script>
   const API = '';
   let currentUser = null;
+  let genMode = 'auto'; // 'auto' | 'custom'
+
+  function setMode(mode) {
+    genMode = mode;
+    document.getElementById('modeAuto').classList.toggle('active', mode === 'auto');
+    document.getElementById('modeCustom').classList.toggle('active', mode === 'custom');
+    document.getElementById('fieldCount').style.display = mode === 'auto' ? '' : 'none';
+    document.getElementById('fieldCustom').style.display = mode === 'custom' ? '' : 'none';
+  }
 
   async function doLogin() {
     const u = document.getElementById('username').value.trim();
@@ -297,190 +332,16 @@
   });
 
   async function generateKeys() {
-    const prefix   = document.getElementById('genPrefix').value.trim() || 'MT';
-    const count    = +document.getElementById('genCount').value || 1;
     const duration = document.getElementById('genDuration').value;
     const tier     = document.getElementById('genTier').value;
 
-    const r = await fetch(API + '/api/generate', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ username: currentUser.user, count, duration, tier, prefix })
-    });
-    const d = await r.json();
-    if (!r.ok) { alert(d.error); return; }
-    showGenResult(d.keys);
-    refreshAll();
-  }
+    let body = { username: currentUser.user, duration, tier, mode: genMode };
 
-  function showGenResult(keys) {
-    const res = document.getElementById('genResult');
-    const box = document.getElementById('genKeys');
-    box.innerHTML = '';
-    keys.forEach(k => {
-      const c = document.createElement('div');
-      c.className = 'key-chip';
-      c.textContent = k;
-      c.onclick = () => {
-        navigator.clipboard.writeText(k);
-        const old = c.textContent;
-        c.textContent = '✓ Скопировано';
-        setTimeout(() => c.textContent = old, 1000);
-      };
-      box.appendChild(c);
-    });
-    res.classList.add('show');
-  }
-
-  async function createReseller() {
-    const resellerUser = document.getElementById('resUser').value.trim();
-    const resellerPass = document.getElementById('resPass').value;
-    const limit = +document.getElementById('resLimit').value || 50;
-
-    const r = await fetch(API + '/api/resellers', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        adminUser: currentUser.user, resellerUser, resellerPass, limit
-      })
-    });
-    const d = await r.json();
-    if (!r.ok) { alert(d.error); return; }
-    document.getElementById('resUser').value = '';
-    document.getElementById('resPass').value = '';
-    refreshAll();
-    alert('Реселлер создан: ' + resellerUser);
-  }
-
-  async function toggleReseller(u) {
-    await fetch(API + '/api/resellers/toggle', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ adminUser: currentUser.user, target: u })
-    });
-    refreshAll();
-  }
-
-  async function deleteReseller(u) {
-    if (!confirm('Удалить ' + u + '?')) return;
-    await fetch(API + '/api/resellers/delete', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ adminUser: currentUser.user, target: u })
-    });
-    refreshAll();
-  }
-
-  async function refreshAll() {
-    if (!currentUser) return;
-    await renderStats();
-    await renderKeys();
-    if (currentUser.role === 'admin') await renderResellers();
-  }
-
-  async function renderStats() {
-    const r = await fetch(API + '/api/stats?username=' + encodeURIComponent(currentUser.user));
-    const d = await r.json();
-    if (!r.ok) return;
-
-    document.getElementById('statKeys').textContent = d.total;
-    document.getElementById('statActive').textContent = d.active;
-    document.getElementById('statUsed').textContent = d.used;
-    document.getElementById('statResellers').textContent =
-      currentUser.role === 'admin' ? d.resellers : '—';
-
-    const box = document.getElementById('byOwnerBox');
-    const tbl = document.getElementById('byOwnerTable');
-
-    if (currentUser.role === 'admin' && d.byOwner && d.byOwner.length) {
-      box.style.display = 'block';
-      let h = `<table><thead><tr>
-        <th>Владелец</th><th>Всего</th><th>Акт.</th><th>Исп.</th>
-      </tr></thead><tbody>`;
-      d.byOwner.forEach(o => {
-        h += `<tr>
-          <td><b>${o.owner}</b></td>
-          <td>${o.count}</td>
-          <td class="status-active">${o.active}</td>
-          <td class="status-used">${o.used}</td>
-        </tr>`;
-      });
-      h += '</tbody></table>';
-      tbl.innerHTML = h;
+    if (genMode === 'custom') {
+      const ck = document.getElementById('genCustom').value.trim();
+      if (!ck) { alert('Введи свой ключ'); return; }
+      body.count = 1;
+      body.customKey = ck;
     } else {
-      box.style.display = 'none';
+      body.count = +document.getElementById('genCount').value || 1;
     }
-  }
-
-  async function renderKeys() {
-    const r = await fetch(API + '/api/keys?username=' + encodeURIComponent(currentUser.user));
-    const keys = await r.json();
-    const box = document.getElementById('keysTable');
-
-    if (!keys.length) {
-      box.innerHTML = '<div class="empty">Ключей пока нет</div>';
-      return;
-    }
-
-    let h = `<table><thead><tr>
-      <th>Ключ</th><th>Тариф</th><th>Срок</th><th>Владелец</th>
-      <th>Статус</th><th>Создан</th>
-    </tr></thead><tbody>`;
-
-    keys.forEach(k => {
-      const created = new Date(+k.created).toLocaleString('ru-RU');
-      const status = k.used
-        ? '<span class="status-used">Использован</span>'
-        : '<span class="status-active">Активен</span>';
-      h += `<tr>
-        <td class="key-mono">${k.key_value}</td>
-        <td>${(k.tier||'').toUpperCase()}</td>
-        <td>${k.duration}</td>
-        <td>${k.owner}</td>
-        <td>${status}</td>
-        <td>${created}</td>
-      </tr>`;
-    });
-    h += '</tbody></table>';
-    box.innerHTML = h;
-  }
-
-  async function renderResellers() {
-    const r = await fetch(API + '/api/resellers?username=' + encodeURIComponent(currentUser.user));
-    const list = await r.json();
-    const box = document.getElementById('resellersTable');
-
-    if (!list.length) {
-      box.innerHTML = '<div class="empty">Реселлеров нет</div>';
-      return;
-    }
-
-    let h = `<table><thead><tr>
-      <th>Логин</th><th>Пароль</th><th>Лимит</th>
-      <th>Создано</th><th>Статус</th><th>Действия</th>
-    </tr></thead><tbody>`;
-
-    list.forEach(rr => {
-      h += `<tr>
-        <td><b>${rr.username}</b></td>
-        <td class="key-mono">${rr.password}</td>
-        <td>${rr.limit_keys}</td>
-        <td>${rr.key_count}</td>
-        <td>${rr.active
-          ? '<span class="status-active">Активен</span>'
-          : '<span class="status-used">Отключён</span>'}</td>
-        <td>
-          <button class="btn small" onclick="toggleReseller('${rr.username}')">
-            ${rr.active ? 'Откл' : 'Вкл'}
-          </button>
-          <button class="btn small danger" onclick="deleteReseller('${rr.username}')">Удал</button>
-        </td>
-      </tr>`;
-    });
-    h += '</tbody></table>';
-    box.innerHTML = h;
-  }
-
-  document.getElementById('password').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doLogin();
-  });
-</script>
-
-</body>
-</html>
