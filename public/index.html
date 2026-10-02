@@ -37,7 +37,7 @@
     font-weight:700; letter-spacing:1.5px; cursor:pointer; }
   .login button:hover { box-shadow:0 0 25px rgba(90,176,255,0.8); }
   .err { color:#ff5a5a; font-size:12px; text-align:center;
-    margin-bottom:10px; min-height:16px; }
+    margin-bottom:10px; min-height:16px; font-weight:600; }
 
   .panel { display:none; }
   .panel.show { display:block; }
@@ -83,10 +83,7 @@
     box-shadow:0 0 12px rgba(90,176,255,0.3); }
   .field select option { background:#0a0e18; }
 
-  /* Переключатель режима */
-  .mode-switch {
-    display:flex; gap:8px; margin-bottom:4px;
-  }
+  .mode-switch { display:flex; gap:8px; margin-bottom:14px; }
   .mode-btn {
     flex:1; padding:12px; text-align:center; cursor:pointer;
     background:rgba(10,15,25,0.7); border:1.5px solid rgba(58,141,222,0.4);
@@ -149,6 +146,7 @@
 
 <div class="wrap">
 
+  <!-- LOGIN -->
   <div class="login" id="login">
     <h1>Manifest<span>Tools</span></h1>
     <div class="sub">KEY MANAGEMENT PANEL</div>
@@ -160,6 +158,7 @@
     <button onclick="doLogin()">ВОЙТИ</button>
   </div>
 
+  <!-- PANEL -->
   <div class="panel" id="panel">
     <div class="top">
       <h1>Manifest<span>Tools</span> · Key Panel</h1>
@@ -177,6 +176,7 @@
       <div class="tab admin-only" data-tab="resellers">РЕСЕЛЛЕРЫ</div>
     </div>
 
+    <!-- DASHBOARD -->
     <div class="section active" id="dashboard">
       <h2>Общая статистика</h2>
       <div class="stats">
@@ -191,23 +191,21 @@
       </div>
     </div>
 
+    <!-- ГЕНЕРАТОР -->
     <div class="section" id="gen">
       <h2>Генератор ключей</h2>
 
-      <!-- Переключатель режима -->
       <div class="mode-switch">
         <div class="mode-btn active" id="modeAuto" onclick="setMode('auto')">ГЕНЕРИРОВАННЫЙ</div>
         <div class="mode-btn" id="modeCustom" onclick="setMode('custom')">СВОЙ КЛЮЧ</div>
       </div>
 
       <div class="form">
-        <!-- Поле для генерированного режима: количество -->
         <div class="field" id="fieldCount">
           <label>Количество</label>
           <input type="number" id="genCount" value="1" min="1" max="200">
         </div>
 
-        <!-- Поле для своего ключа -->
         <div class="field" id="fieldCustom" style="display:none">
           <label>Свой ключ</label>
           <input type="text" id="genCustom" placeholder="@Minefast или HappyBithday" maxlength="60">
@@ -243,11 +241,13 @@
       </div>
     </div>
 
+    <!-- КЛЮЧИ -->
     <div class="section" id="keys">
       <h2>Все ключи</h2>
       <div class="table-scroll" id="keysTable"></div>
     </div>
 
+    <!-- РЕСЕЛЛЕРЫ -->
     <div class="section" id="resellers">
       <h2>Создать реселлера</h2>
       <div class="form">
@@ -269,7 +269,7 @@
 <script>
   const API = '';
   let currentUser = null;
-  let genMode = 'auto'; // 'auto' | 'custom'
+  let genMode = 'auto';
 
   function setMode(mode) {
     genMode = mode;
@@ -279,23 +279,38 @@
     document.getElementById('fieldCustom').style.display = mode === 'custom' ? '' : 'none';
   }
 
+  // ============================================================
+  // LOGIN — с обработкой ошибок
+  // ============================================================
   async function doLogin() {
     const u = document.getElementById('username').value.trim();
     const p = document.getElementById('password').value;
     const err = document.getElementById('err');
     err.textContent = '';
-    if (!u || !p) { err.textContent = 'Введите логин и пароль'; return; }
+
+    if (!u || !p) {
+      err.textContent = 'Введите логин и пароль';
+      return;
+    }
 
     try {
       const r = await fetch(API + '/api/login', {
-        method:'POST', headers:{'Content-Type':'application/json'},
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ username:u, password:p })
       });
       const d = await r.json();
-      if (!r.ok) { err.textContent = d.error || 'Ошибка'; return; }
+
+      if (!r.ok) {
+        err.textContent = d.error || 'Неверный логин или пароль';
+        return;
+      }
+
       currentUser = d;
       showPanel();
-    } catch { err.textContent = 'Сервер недоступен'; }
+    } catch (e) {
+      err.textContent = 'Ошибка соединения с сервером';
+    }
   }
 
   function showPanel() {
@@ -331,6 +346,9 @@
     });
   });
 
+  // ============================================================
+  // ГЕНЕРАЦИЯ
+  // ============================================================
   async function generateKeys() {
     const duration = document.getElementById('genDuration').value;
     const tier     = document.getElementById('genTier').value;
@@ -345,3 +363,192 @@
     } else {
       body.count = +document.getElementById('genCount').value || 1;
     }
+
+    const r = await fetch(API + '/api/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error || 'Ошибка'); return; }
+    showGenResult(d.keys);
+    refreshAll();
+  }
+
+  function showGenResult(keys) {
+    const res = document.getElementById('genResult');
+    const box = document.getElementById('genKeys');
+    box.innerHTML = '';
+    keys.forEach(k => {
+      const c = document.createElement('div');
+      c.className = 'key-chip';
+      c.textContent = k;
+      c.onclick = () => {
+        navigator.clipboard.writeText(k);
+        const old = c.textContent;
+        c.textContent = '✓ Скопировано';
+        setTimeout(() => c.textContent = old, 1000);
+      };
+      box.appendChild(c);
+    });
+    res.classList.add('show');
+  }
+
+  // ============================================================
+  // РЕСЕЛЛЕРЫ
+  // ============================================================
+  async function createReseller() {
+    const resellerUser = document.getElementById('resUser').value.trim();
+    const resellerPass = document.getElementById('resPass').value;
+    const limit = +document.getElementById('resLimit').value || 50;
+
+    const r = await fetch(API + '/api/resellers', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        adminUser: currentUser.user, resellerUser, resellerPass, limit
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error); return; }
+    document.getElementById('resUser').value = '';
+    document.getElementById('resPass').value = '';
+    refreshAll();
+    alert('Реселлер создан: ' + resellerUser);
+  }
+
+  async function toggleReseller(u) {
+    await fetch(API + '/api/resellers/toggle', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ adminUser: currentUser.user, target: u })
+    });
+    refreshAll();
+  }
+
+  async function deleteReseller(u) {
+    if (!confirm('Удалить ' + u + '?')) return;
+    await fetch(API + '/api/resellers/delete', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ adminUser: currentUser.user, target: u })
+    });
+    refreshAll();
+  }
+
+  // ============================================================
+  // RENDER
+  // ============================================================
+  async function refreshAll() {
+    if (!currentUser) return;
+    await renderStats();
+    await renderKeys();
+    if (currentUser.role === 'admin') await renderResellers();
+  }
+
+  async function renderStats() {
+    const r = await fetch(API + '/api/stats?username=' + encodeURIComponent(currentUser.user));
+    const d = await r.json();
+    if (!r.ok) return;
+
+    document.getElementById('statKeys').textContent = d.total;
+    document.getElementById('statActive').textContent = d.active;
+    document.getElementById('statUsed').textContent = d.used;
+    document.getElementById('statResellers').textContent =
+      currentUser.role === 'admin' ? d.resellers : '—';
+
+    const box = document.getElementById('byOwnerBox');
+    const tbl = document.getElementById('byOwnerTable');
+
+    if (currentUser.role === 'admin' && d.byOwner && d.byOwner.length) {
+      box.style.display = 'block';
+      let h = `<table><thead><tr>
+        <th>Владелец</th><th>Всего</th><th>Акт.</th><th>Исп.</th>
+      </tr></thead><tbody>`;
+      d.byOwner.forEach(o => {
+        h += `<tr>
+          <td><b>${o.owner}</b></td>
+          <td>${o.count}</td>
+          <td class="status-active">${o.active}</td>
+          <td class="status-used">${o.used}</td>
+        </tr>`;
+      });
+      h += '</tbody></table>';
+      tbl.innerHTML = h;
+    } else {
+      box.style.display = 'none';
+    }
+  }
+
+  async function renderKeys() {
+    const r = await fetch(API + '/api/keys?username=' + encodeURIComponent(currentUser.user));
+    const keys = await r.json();
+    const box = document.getElementById('keysTable');
+
+    if (!keys.length) {
+      box.innerHTML = '<div class="empty">Ключей пока нет</div>';
+      return;
+    }
+
+    let h = `<table><thead><tr>
+      <th>Ключ</th><th>Тариф</th><th>Срок</th><th>Владелец</th>
+      <th>Статус</th><th>Создан</th>
+    </tr></thead><tbody>`;
+
+    keys.forEach(k => {
+      const created = new Date(+k.created).toLocaleString('ru-RU');
+      const status = k.used
+        ? '<span class="status-used">Использован</span>'
+        : '<span class="status-active">Активен</span>';
+      h += `<tr>
+        <td class="key-mono">${k.key_value}</td>
+        <td>${(k.tier||'').toUpperCase()}</td>
+        <td>${k.duration}</td>
+        <td>${k.owner}</td>
+        <td>${status}</td>
+        <td>${created}</td>
+      </tr>`;
+    });
+    h += '</tbody></table>';
+    box.innerHTML = h;
+  }
+
+  async function renderResellers() {
+    const r = await fetch(API + '/api/resellers?username=' + encodeURIComponent(currentUser.user));
+    const list = await r.json();
+    const box = document.getElementById('resellersTable');
+
+    if (!list.length) {
+      box.innerHTML = '<div class="empty">Реселлеров нет</div>';
+      return;
+    }
+
+    let h = `<table><thead><tr>
+      <th>Логин</th><th>Пароль</th><th>Лимит</th>
+      <th>Создано</th><th>Статус</th><th>Действия</th>
+    </tr></thead><tbody>`;
+
+    list.forEach(rr => {
+      h += `<tr>
+        <td><b>${rr.username}</b></td>
+        <td class="key-mono">${rr.password}</td>
+        <td>${rr.limit_keys}</td>
+        <td>${rr.key_count}</td>
+        <td>${rr.active
+          ? '<span class="status-active">Активен</span>'
+          : '<span class="status-used">Отключён</span>'}</td>
+        <td>
+          <button class="btn small" onclick="toggleReseller('${rr.username}')">
+            ${rr.active ? 'Откл' : 'Вкл'}
+          </button>
+          <button class="btn small danger" onclick="deleteReseller('${rr.username}')">Удал</button>
+        </td>
+      </tr>`;
+    });
+    h += '</tbody></table>';
+    box.innerHTML = h;
+  }
+
+  document.getElementById('password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+</script>
+
+</body>
+</html>
