@@ -56,9 +56,9 @@ async function initDB() {
     await pool.query(
       `INSERT INTO users (username, password, role, limit_keys, active, created)
        VALUES ($1, $2, 'admin', 999999, 1, $3)`,
-      ['Manifest', 'mama22112012', Date.now()]
+      ['please', 'please', Date.now()]
     );
-    console.log('[INIT] Admin: Manifest / mama22112012');
+    console.log('[INIT] Admin: manifest / mama22112012');
   }
 }
 
