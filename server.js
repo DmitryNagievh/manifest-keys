@@ -8,6 +8,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const path = require('path');
+const https = require('https');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,7 +18,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ============================================================
-// БД
+// БАЗА
 // ============================================================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -27,6 +28,7 @@ const pool = new Pool({
 });
 
 async function initDB() {
+  // Таблица пользователей
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id         SERIAL PRIMARY KEY,
@@ -39,6 +41,7 @@ async function initDB() {
     );
   `);
 
+  // Таблица ключей
   await pool.query(`
     CREATE TABLE IF NOT EXISTS keys (
       id        SERIAL PRIMARY KEY,
@@ -51,6 +54,27 @@ async function initDB() {
     );
   `);
 
+  // Дополнительные колонки для ключей (HWID, expires)
+  await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS hwid TEXT;`);
+  await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS expires BIGINT;`);
+  await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS used_by TEXT;`);
+  await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS used_at BIGINT;`);
+
+  // Таблица оффсетов
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS offsets (
+      id       SERIAL PRIMARY KEY,
+      version  TEXT NOT NULL,
+      server   TEXT NOT NULL,
+      arch     TEXT NOT NULL,
+      name     TEXT NOT NULL,
+      value    TEXT NOT NULL,
+      updated  BIGINT NOT NULL,
+      UNIQUE(version, server, arch, name)
+    );
+  `);
+
+  // Создать админа
   const r = await pool.query("SELECT * FROM users WHERE role='admin'");
   if (r.rows.length === 0) {
     await pool.query(
@@ -84,9 +108,8 @@ app.post('/api/login', async (req, res) => {
 });
 
 // ============================================================
-// ГЕНЕРАЦИЯ
+// ГЕНЕРАЦИЯ КЛЮЧЕЙ
 // ============================================================
-// Срок → код для ключа
 const DURATION_CODE = {
   '1 день':   '1d',
   '3 дня':    '3d',
@@ -95,21 +118,17 @@ const DURATION_CODE = {
   '30 дней':  '30d'
 };
 
-// 10 случайных символов (строчные буквы + цифры)
 function randomPart(len) {
   const c = 'abcdefghjkmnpqrstuvwxyz23456789';
   return Array.from({ length: len }, () =>
     c[Math.floor(Math.random() * c.length)]).join('');
 }
 
-// Генерированный ключ: MT-{код}-{10 символов}
 function makeKeyByDuration(duration) {
   const code = DURATION_CODE[duration] || '7d';
   return `MT-${code}-${randomPart(10)}`;
 }
 
-// Свой ключ — берём как ввёл пользователь
-// Разрешаем: A-Z a-z 0-9 _ - @ . (макс 60 символов)
 function cleanCustomKey(k) {
   if (!k) return null;
   let s = String(k).trim();
@@ -142,11 +161,11 @@ app.post('/api/generate', async (req, res) => {
 
     const out = [];
 
-    // --- РЕЖИМ: СВОЙ КЛЮЧ ---
+    // Режим: свой ключ
     if (mode === 'custom') {
       const base = cleanCustomKey(customKey);
       if (!base) return res.status(400).json({ error: 'Введи свой ключ' });
-      if (cnt > 1) return res.status(400).json({ error: 'Свой ключ — только 1 штука за раз' });
+      if (cnt > 1) return res.status(400).json({ error: 'Свой ключ — только 1 штука' });
 
       const chk = await pool.query('SELECT id FROM keys WHERE key_value=$1', [base]);
       if (chk.rows.length > 0) return res.status(400).json({ error: 'Такой ключ уже существует' });
@@ -157,8 +176,7 @@ app.post('/api/generate', async (req, res) => {
       );
       out.push(base);
     }
-
-    // --- РЕЖИМ: ГЕНЕРИРОВАННЫЙ ---
+    // Режим: авто
     else {
       for (let i = 0; i < cnt; i++) {
         let k, ok = false, tries = 0;
@@ -184,7 +202,59 @@ app.post('/api/generate', async (req, res) => {
 });
 
 // ============================================================
-// КЛЮЧИ
+// ПРОВЕРКА КЛЮЧА (для чита)
+// ============================================================
+app.post('/api/check', async (req, res) => {
+  try {
+    const { key, hwid } = req.body || {};
+    if (!key) return res.json({ ok: false, error: 'Ключ не указан' });
+
+    const r = await pool.query('SELECT * FROM keys WHERE key_value=$1', [key]);
+    if (r.rows.length === 0) return res.json({ ok: false, error: 'Ключ не найден' });
+
+    const k = r.rows[0];
+    const now = Date.now();
+
+    if (k.used === 1) {
+      if (k.hwid && hwid && k.hwid === hwid) {
+        if (k.expires && now > k.expires) {
+          return res.json({ ok: false, error: 'Срок ключа истёк' });
+        }
+        return res.json({
+          ok: true, tier: k.tier, duration: k.duration,
+          expires: k.expires, message: 'Добро пожаловать'
+        });
+      }
+      return res.json({ ok: false, error: 'Ключ привязан к другому устройству' });
+    }
+
+    const durMap = {
+      '1 день':   1  * 86400000,
+      '3 дня':    3  * 86400000,
+      '7 дней':   7  * 86400000,
+      '14 дней':  14 * 86400000,
+      '30 дней':  30 * 86400000
+    };
+    const expires = durMap[k.duration] ? now + durMap[k.duration] : null;
+
+    await pool.query(
+      `UPDATE keys SET used=1, used_by=$1, used_at=$2, hwid=$3, expires=$4
+       WHERE key_value=$5`,
+      [hwid || 'unknown', now, hwid || 'unknown', expires, key]
+    );
+
+    res.json({
+      ok: true, tier: k.tier, duration: k.duration,
+      expires, message: 'Ключ активирован'
+    });
+  } catch (e) {
+    console.error(e);
+    res.json({ ok: false, error: 'Ошибка сервера' });
+  }
+});
+
+// ============================================================
+// КЛЮЧИ (список)
 // ============================================================
 app.get('/api/keys', async (req, res) => {
   try {
@@ -218,8 +288,7 @@ app.get('/api/stats', async (req, res) => {
       const resellers = +(await pool.query("SELECT COUNT(*) AS c FROM users WHERE role='reseller'")).rows[0].c;
 
       const byOwner = (await pool.query(`
-        SELECT owner,
-               COUNT(*)::int AS count,
+        SELECT owner, COUNT(*)::int AS count,
                SUM(CASE WHEN used=0 THEN 1 ELSE 0 END)::int AS active,
                SUM(CASE WHEN used=1 THEN 1 ELSE 0 END)::int AS used
         FROM keys GROUP BY owner ORDER BY count DESC
@@ -295,6 +364,156 @@ app.post('/api/resellers/delete', async (req, res) => {
 
     await pool.query("DELETE FROM users WHERE username=$1 AND role='reseller'", [target]);
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// ============================================================
+// СМЕНА ПАРОЛЯ
+// ============================================================
+app.post('/api/change-password', async (req, res) => {
+  try {
+    const { username, oldPass, newPass } = req.body || {};
+    const u = (await pool.query('SELECT * FROM users WHERE username=$1 AND password=$2', [username, oldPass])).rows[0];
+    if (!u) return res.status(401).json({ error: 'Неверный старый пароль' });
+    if (!newPass || newPass.length < 4) return res.status(400).json({ error: 'Мин 4 символа' });
+
+    await pool.query('UPDATE users SET password=$1 WHERE username=$2', [newPass, username]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// ============================================================
+// OFFSETS — GITHUB SYNC
+// ============================================================
+const GITHUB_OFFSETS_URL = process.env.GITHUB_OFFSETS_URL || 
+  'https://raw.githubusercontent.com/ТВОЙ_ЮЗЕР/manifest-offsets/main/offsets.json';
+
+function fetchGithubOffsets() {
+  return new Promise((resolve, reject) => {
+    https.get(GITHUB_OFFSETS_URL, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function syncOffsetsFromGithub() {
+  try {
+    const data = await fetchGithubOffsets();
+    let count = 0;
+
+    for (const version in data) {
+      for (const server in data[version]) {
+        for (const arch in data[version][server]) {
+          const offsets = data[version][server][arch];
+          for (const name in offsets) {
+            const value = String(offsets[name]);
+            await pool.query(`
+              INSERT INTO offsets (version, server, arch, name, value, updated)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              ON CONFLICT (version, server, arch, name)
+              DO UPDATE SET value = $5, updated = $6
+            `, [version, server, arch, name, value, Date.now()]);
+            count++;
+          }
+        }
+      }
+    }
+
+    console.log(`[OFFSETS] Синхронизировано: ${count} записей`);
+  } catch (e) {
+    console.error('[OFFSETS] Ошибка:', e.message);
+  }
+}
+
+// Авто-синхронизация каждые 5 минут
+setInterval(syncOffsetsFromGithub, 5 * 60 * 1000);
+setTimeout(syncOffsetsFromGithub, 10000);
+
+// ============================================================
+// OFFSETS — API
+// ============================================================
+
+// Чит качает оффсеты
+app.get('/api/offsets', async (req, res) => {
+  try {
+    const { version, server, arch } = req.query;
+    if (!version || !server || !arch) {
+      return res.status(400).json({ error: 'Укажи version, server, arch' });
+    }
+
+    const rows = await pool.query(
+      'SELECT name, value FROM offsets WHERE version=$1 AND server=$2 AND arch=$3',
+      [version, server, arch]
+    );
+
+    const offsets = {};
+    rows.rows.forEach(r => offsets[r.name] = r.value);
+
+    res.json({
+      version, server, arch,
+      offsets,
+      count: rows.rows.length,
+      updated: Date.now()
+    });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Список оффсетов (для админа)
+app.get('/api/offsets/list', async (req, res) => {
+  try {
+    const { adminUser } = req.query;
+    const a = (await pool.query('SELECT * FROM users WHERE username=$1', [adminUser])).rows[0];
+    if (!a || a.role !== 'admin') return res.status(403).json({ error: 'Нет доступа' });
+
+    const rows = await pool.query('SELECT * FROM offsets ORDER BY version, server, arch, name');
+    res.json(rows.rows);
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Ручное изменение оффсета
+app.post('/api/offsets/set', async (req, res) => {
+  try {
+    const { adminUser, version, server, arch, name, value } = req.body || {};
+    const a = (await pool.query('SELECT * FROM users WHERE username=$1', [adminUser])).rows[0];
+    if (!a || a.role !== 'admin') return res.status(403).json({ error: 'Нет доступа' });
+
+    await pool.query(`
+      INSERT INTO offsets (version, server, arch, name, value, updated)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (version, server, arch, name)
+      DO UPDATE SET value = $5, updated = $6
+    `, [version, server, arch, name, String(value), Date.now()]);
+
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Удаление оффсета
+app.post('/api/offsets/delete', async (req, res) => {
+  try {
+    const { adminUser, id } = req.body || {};
+    const a = (await pool.query('SELECT * FROM users WHERE username=$1', [adminUser])).rows[0];
+    if (!a || a.role !== 'admin') return res.status(403).json({ error: 'Нет доступа' });
+
+    await pool.query('DELETE FROM offsets WHERE id=$1', [id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Ручной триггер синхронизации
+app.post('/api/offsets/sync', async (req, res) => {
+  try {
+    const { adminUser } = req.body || {};
+    const a = (await pool.query('SELECT * FROM users WHERE username=$1', [adminUser])).rows[0];
+    if (!a || a.role !== 'admin') return res.status(403).json({ error: 'Нет доступа' });
+
+    await syncOffsetsFromGithub();
+    res.json({ ok: true, message: 'Синхронизировано' });
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
 });
 
