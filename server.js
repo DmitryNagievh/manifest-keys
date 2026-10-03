@@ -14,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ============================================================
@@ -28,7 +28,7 @@ const pool = new Pool({
 });
 
 async function initDB() {
-  // Таблица пользователей
+  // Пользователи
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id         SERIAL PRIMARY KEY,
@@ -41,7 +41,7 @@ async function initDB() {
     );
   `);
 
-  // Таблица ключей
+  // Ключи
   await pool.query(`
     CREATE TABLE IF NOT EXISTS keys (
       id        SERIAL PRIMARY KEY,
@@ -54,13 +54,12 @@ async function initDB() {
     );
   `);
 
-  // Дополнительные колонки для ключей (HWID, expires)
   await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS hwid TEXT;`);
   await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS expires BIGINT;`);
   await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS used_by TEXT;`);
   await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS used_at BIGINT;`);
 
-  // Таблица оффсетов
+  // Оффсеты
   await pool.query(`
     CREATE TABLE IF NOT EXISTS offsets (
       id       SERIAL PRIMARY KEY,
@@ -74,7 +73,16 @@ async function initDB() {
     );
   `);
 
-  // Создать админа
+  // ⭐ НОВОЕ: Конфиги пользователей
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_configs (
+      hwid     TEXT PRIMARY KEY,
+      config   JSONB NOT NULL,
+      updated  BIGINT NOT NULL
+    );
+  `);
+
+  // Админ
   const r = await pool.query("SELECT * FROM users WHERE role='admin'");
   if (r.rows.length === 0) {
     await pool.query(
@@ -161,7 +169,6 @@ app.post('/api/generate', async (req, res) => {
 
     const out = [];
 
-    // Режим: свой ключ
     if (mode === 'custom') {
       const base = cleanCustomKey(customKey);
       if (!base) return res.status(400).json({ error: 'Введи свой ключ' });
@@ -175,9 +182,7 @@ app.post('/api/generate', async (req, res) => {
         [base, dur, tr, username, Date.now()]
       );
       out.push(base);
-    }
-    // Режим: авто
-    else {
+    } else {
       for (let i = 0; i < cnt; i++) {
         let k, ok = false, tries = 0;
         while (!ok && tries < 20) {
@@ -385,8 +390,8 @@ app.post('/api/change-password', async (req, res) => {
 // ============================================================
 // OFFSETS — GITHUB SYNC
 // ============================================================
-const GITHUB_OFFSETS_URL = process.env.GITHUB_OFFSETS_URL || 
-  'https://raw.githubusercontent.com/ТВОЙ_ЮЗЕР/manifest-offsets/main/offsets.json';
+const GITHUB_OFFSETS_URL = process.env.GITHUB_OFFSETS_URL ||
+  'https://raw.githubusercontent.com/DmitryNagievh/manifest-offsets/main/offsets.json';
 
 function fetchGithubOffsets() {
   return new Promise((resolve, reject) => {
@@ -430,15 +435,12 @@ async function syncOffsetsFromGithub() {
   }
 }
 
-// Авто-синхронизация каждые 5 минут
 setInterval(syncOffsetsFromGithub, 5 * 60 * 1000);
 setTimeout(syncOffsetsFromGithub, 10000);
 
 // ============================================================
 // OFFSETS — API
 // ============================================================
-
-// Чит качает оффсеты
 app.get('/api/offsets', async (req, res) => {
   try {
     const { version, server, arch } = req.query;
@@ -463,7 +465,6 @@ app.get('/api/offsets', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
 });
 
-// Список оффсетов (для админа)
 app.get('/api/offsets/list', async (req, res) => {
   try {
     const { adminUser } = req.query;
@@ -475,7 +476,6 @@ app.get('/api/offsets/list', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
 });
 
-// Ручное изменение оффсета
 app.post('/api/offsets/set', async (req, res) => {
   try {
     const { adminUser, version, server, arch, name, value } = req.body || {};
@@ -493,19 +493,6 @@ app.post('/api/offsets/set', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
 });
 
-// Удаление оффсета
-app.post('/api/offsets/delete', async (req, res) => {
-  try {
-    const { adminUser, id } = req.body || {};
-    const a = (await pool.query('SELECT * FROM users WHERE username=$1', [adminUser])).rows[0];
-    if (!a || a.role !== 'admin') return res.status(403).json({ error: 'Нет доступа' });
-
-    await pool.query('DELETE FROM offsets WHERE id=$1', [id]);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
-});
-
-// Ручной триггер синхронизации
 app.post('/api/offsets/sync', async (req, res) => {
   try {
     const { adminUser } = req.body || {};
@@ -514,6 +501,100 @@ app.post('/api/offsets/sync', async (req, res) => {
 
     await syncOffsetsFromGithub();
     res.json({ ok: true, message: 'Синхронизировано' });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// ============================================================
+// ⭐ USER CONFIG — СОХРАНЕНИЕ И ЗАГРУЗКА НАСТРОЕК
+// ============================================================
+
+// Дефолтный конфиг (используется если у юзера ещё нет настроек)
+const DEFAULT_CONFIG = {
+  aimbot:        false,
+  instant_hit:   false,
+  no_recoil:     true,
+  no_spread:     true,
+  shoot_bullet:  false,
+  calc_shoot:    false,
+  grenade:       false,
+  fov:           90,       // от 1 до 180
+  smooth:        30,       // от 1 до 100
+  ignore_knocked: true,
+  ignore_bot:    true,
+  esp_line:      false,
+  esp_text:      false,
+  esp_texture:   false,
+  w2s:           false,
+  bone_pos:      false,
+  bone_name:     false,
+  los:           false,
+  distance:      false,
+  muzzle:        false,
+  fps120:        false,
+  no_grass:      false,
+  ipad:          100,      // от 70 до 150
+  aim_bone:      'head',   // head / neck / spine / pelvis
+  aim_key:       0         // 0 = всегда, иначе код клавиши
+};
+
+// Сохранить настройки
+app.post('/api/config/save', async (req, res) => {
+  try {
+    const { hwid, config } = req.body || {};
+    if (!hwid || !config) return res.status(400).json({ error: 'hwid и config обязательны' });
+
+    // Валидация FOV
+    if (typeof config.fov === 'number') {
+      config.fov = Math.max(1, Math.min(180, config.fov));
+    }
+    // Валидация Smooth
+    if (typeof config.smooth === 'number') {
+      config.smooth = Math.max(1, Math.min(100, config.smooth));
+    }
+    // Валидация iPad View
+    if (typeof config.ipad === 'number') {
+      config.ipad = Math.max(70, Math.min(150, config.ipad));
+    }
+
+    await pool.query(`
+      INSERT INTO user_configs (hwid, config, updated)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (hwid) DO UPDATE SET config = $2, updated = $3
+    `, [hwid, JSON.stringify(config), Date.now()]);
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Ошибка' });
+  }
+});
+
+// Загрузить настройки
+app.get('/api/config/load', async (req, res) => {
+  try {
+    const { hwid } = req.query;
+    if (!hwid) return res.status(400).json({ error: 'hwid обязателен' });
+
+    const r = await pool.query('SELECT config FROM user_configs WHERE hwid=$1', [hwid]);
+    if (r.rows.length === 0) {
+      return res.json({ ok: true, config: DEFAULT_CONFIG, is_default: true });
+    }
+
+    res.json({ ok: true, config: r.rows[0].config, is_default: false });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Ошибка' });
+  }
+});
+
+// Сброс настроек на дефолт
+app.post('/api/config/reset', async (req, res) => {
+  try {
+    const { hwid } = req.body || {};
+    if (!hwid) return res.status(400).json({ error: 'hwid обязателен' });
+
+    await pool.query('DELETE FROM user_configs WHERE hwid=$1', [hwid]);
+    res.json({ ok: true, config: DEFAULT_CONFIG });
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
 });
 
