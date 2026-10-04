@@ -1,7 +1,8 @@
 // ============================================================
-// ManifestTools — Key Server (PostgreSQL)
+// ManifestTools — Key Server + Bot API (PostgreSQL)
 // Rocket Way // 20.05.2026
 // Login: Manifest / mama22112012
+// Bot: @... (BOT_SECRET)
 // ============================================================
 
 const express = require('express');
@@ -16,6 +17,18 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ============================================================
+// КОНСТАНТЫ БОТА
+// ============================================================
+const BOT_SECRET = process.env.BOT_SECRET || 'Manifest_tools_key_1120';
+const PRICES = {
+  '1 день':  50,
+  '3 дня':   100,
+  '7 дней':  170,
+  '14 дней': 280,
+  '30 дней': 500
+};
 
 // ============================================================
 // БАЗА
@@ -53,7 +66,6 @@ async function initDB() {
       used      INTEGER DEFAULT 0
     );
   `);
-
   await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS hwid TEXT;`);
   await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS expires BIGINT;`);
   await pool.query(`ALTER TABLE keys ADD COLUMN IF NOT EXISTS used_by TEXT;`);
@@ -73,12 +85,39 @@ async function initDB() {
     );
   `);
 
-  // ⭐ НОВОЕ: Конфиги пользователей
+  // Конфиги юзеров
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_configs (
       hwid     TEXT PRIMARY KEY,
       config   JSONB NOT NULL,
       updated  BIGINT NOT NULL
+    );
+  `);
+
+  // Заказы бота
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id          SERIAL PRIMARY KEY,
+      tg_id       BIGINT NOT NULL,
+      tg_username TEXT,
+      duration    TEXT NOT NULL,
+      price       INTEGER NOT NULL,
+      key_value   TEXT,
+      status      TEXT DEFAULT 'pending',
+      created     BIGINT NOT NULL,
+      paid_at     BIGINT
+    );
+  `);
+
+  // Отзывы
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id          SERIAL PRIMARY KEY,
+      tg_id       BIGINT NOT NULL,
+      tg_username TEXT,
+      text        TEXT NOT NULL,
+      rating      INTEGER DEFAULT 5,
+      created     BIGINT NOT NULL
     );
   `);
 
@@ -147,6 +186,7 @@ function cleanCustomKey(k) {
   return s;
 }
 
+// Генерация ключа (твоя — вручную в панели)
 app.post('/api/generate', async (req, res) => {
   try {
     const { username, count, duration, tier, mode, customKey } = req.body || {};
@@ -259,20 +299,39 @@ app.post('/api/check', async (req, res) => {
 });
 
 // ============================================================
-// КЛЮЧИ (список)
+// КЛЮЧИ
 // ============================================================
 app.get('/api/keys', async (req, res) => {
   try {
-    const { username } = req.query;
+    const { username, filter } = req.query;
     const ur = await pool.query('SELECT * FROM users WHERE username=$1', [username]);
     if (ur.rows.length === 0) return res.status(401).json({ error: 'Нет доступа' });
     const user = ur.rows[0];
 
-    const rows = user.role === 'admin'
-      ? (await pool.query('SELECT * FROM keys ORDER BY created DESC')).rows
-      : (await pool.query('SELECT * FROM keys WHERE owner=$1 ORDER BY created DESC', [username])).rows;
+    let query, params;
 
-    res.json(rows);
+    if (user.role === 'admin') {
+      // Админ видит всё, но может фильтровать
+      if (filter === 'mine') {
+        query = 'SELECT * FROM keys WHERE owner=$1 ORDER BY created DESC';
+        params = [username];
+      } else if (filter === 'bot') {
+        query = "SELECT * FROM keys WHERE owner='BOT' ORDER BY created DESC";
+        params = [];
+      } else if (filter === 'resellers') {
+        query = "SELECT * FROM keys WHERE owner!='BOT' AND owner!=$1 ORDER BY created DESC";
+        params = [username];
+      } else {
+        query = 'SELECT * FROM keys ORDER BY created DESC';
+        params = [];
+      }
+    } else {
+      query = 'SELECT * FROM keys WHERE owner=$1 ORDER BY created DESC';
+      params = [username];
+    }
+
+    const rows = await pool.query(query, params);
+    res.json(rows.rows);
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
 });
 
@@ -291,6 +350,7 @@ app.get('/api/stats', async (req, res) => {
       const active    = +(await pool.query('SELECT COUNT(*) AS c FROM keys WHERE used=0')).rows[0].c;
       const used      = +(await pool.query('SELECT COUNT(*) AS c FROM keys WHERE used=1')).rows[0].c;
       const resellers = +(await pool.query("SELECT COUNT(*) AS c FROM users WHERE role='reseller'")).rows[0].c;
+      const botKeys   = +(await pool.query("SELECT COUNT(*) AS c FROM keys WHERE owner='BOT'")).rows[0].c;
 
       const byOwner = (await pool.query(`
         SELECT owner, COUNT(*)::int AS count,
@@ -299,13 +359,13 @@ app.get('/api/stats', async (req, res) => {
         FROM keys GROUP BY owner ORDER BY count DESC
       `)).rows;
 
-      return res.json({ total, active, used, resellers, byOwner });
+      return res.json({ total, active, used, resellers, botKeys, byOwner });
     }
 
     const total  = +(await pool.query('SELECT COUNT(*) AS c FROM keys WHERE owner=$1', [username])).rows[0].c;
     const active = +(await pool.query('SELECT COUNT(*) AS c FROM keys WHERE owner=$1 AND used=0', [username])).rows[0].c;
     const used   = +(await pool.query('SELECT COUNT(*) AS c FROM keys WHERE owner=$1 AND used=1', [username])).rows[0].c;
-    res.json({ total, active, used, resellers: 0, byOwner: [] });
+    res.json({ total, active, used, resellers: 0, botKeys: 0, byOwner: [] });
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
 });
 
@@ -505,10 +565,8 @@ app.post('/api/offsets/sync', async (req, res) => {
 });
 
 // ============================================================
-// ⭐ USER CONFIG — СОХРАНЕНИЕ И ЗАГРУЗКА НАСТРОЕК
+// USER CONFIG
 // ============================================================
-
-// Дефолтный конфиг (используется если у юзера ещё нет настроек)
 const DEFAULT_CONFIG = {
   aimbot:        false,
   instant_hit:   false,
@@ -517,8 +575,8 @@ const DEFAULT_CONFIG = {
   shoot_bullet:  false,
   calc_shoot:    false,
   grenade:       false,
-  fov:           90,       // от 1 до 180
-  smooth:        30,       // от 1 до 100
+  fov:           90,
+  smooth:        30,
   ignore_knocked: true,
   ignore_bot:    true,
   esp_line:      false,
@@ -532,29 +590,19 @@ const DEFAULT_CONFIG = {
   muzzle:        false,
   fps120:        false,
   no_grass:      false,
-  ipad:          100,      // от 70 до 150
-  aim_bone:      'head',   // head / neck / spine / pelvis
-  aim_key:       0         // 0 = всегда, иначе код клавиши
+  ipad:          100,
+  aim_bone:      'head',
+  aim_key:       0
 };
 
-// Сохранить настройки
 app.post('/api/config/save', async (req, res) => {
   try {
     const { hwid, config } = req.body || {};
     if (!hwid || !config) return res.status(400).json({ error: 'hwid и config обязательны' });
 
-    // Валидация FOV
-    if (typeof config.fov === 'number') {
-      config.fov = Math.max(1, Math.min(180, config.fov));
-    }
-    // Валидация Smooth
-    if (typeof config.smooth === 'number') {
-      config.smooth = Math.max(1, Math.min(100, config.smooth));
-    }
-    // Валидация iPad View
-    if (typeof config.ipad === 'number') {
-      config.ipad = Math.max(70, Math.min(150, config.ipad));
-    }
+    if (typeof config.fov === 'number') config.fov = Math.max(1, Math.min(180, config.fov));
+    if (typeof config.smooth === 'number') config.smooth = Math.max(1, Math.min(100, config.smooth));
+    if (typeof config.ipad === 'number') config.ipad = Math.max(70, Math.min(150, config.ipad));
 
     await pool.query(`
       INSERT INTO user_configs (hwid, config, updated)
@@ -569,7 +617,6 @@ app.post('/api/config/save', async (req, res) => {
   }
 });
 
-// Загрузить настройки
 app.get('/api/config/load', async (req, res) => {
   try {
     const { hwid } = req.query;
@@ -587,7 +634,6 @@ app.get('/api/config/load', async (req, res) => {
   }
 });
 
-// Сброс настроек на дефолт
 app.post('/api/config/reset', async (req, res) => {
   try {
     const { hwid } = req.body || {};
@@ -599,6 +645,130 @@ app.post('/api/config/reset', async (req, res) => {
 });
 
 // ============================================================
+// BOT API — для Telegram-бота
+// ============================================================
+
+// Генерация ключа от бота (owner="BOT")
+app.post('/api/bot/generate', async (req, res) => {
+  try {
+    const { secret, tgId, tgUsername, duration } = req.body || {};
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+    if (!duration || !PRICES[duration]) return res.status(400).json({ error: 'Invalid duration' });
+
+    const code = DURATION_CODE[duration] || '7d';
+    let key, ok = false, tries = 0;
+    while (!ok && tries < 20) {
+      key = `MT-${code}-${randomPart(10)}`;
+      const chk = await pool.query('SELECT id FROM keys WHERE key_value=$1', [key]);
+      if (chk.rows.length === 0) ok = true;
+      tries++;
+    }
+
+    await pool.query(
+      'INSERT INTO keys (key_value, duration, tier, owner, created) VALUES ($1,$2,$3,$4,$5)',
+      [key, duration, 'bot', 'BOT', Date.now()]
+    );
+
+    await pool.query(`
+      INSERT INTO orders (tg_id, tg_username, duration, price, key_value, status, created, paid_at)
+      VALUES ($1, $2, $3, $4, $5, 'paid', $6, $6)
+    `, [tgId, tgUsername || '', duration, PRICES[duration], key, Date.now()]);
+
+    res.json({ ok: true, key });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Ошибка' });
+  }
+});
+
+// Создать заказ (до оплаты)
+app.post('/api/bot/order', async (req, res) => {
+  try {
+    const { secret, tgId, tgUsername, duration } = req.body || {};
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+    if (!duration || !PRICES[duration]) return res.status(400).json({ error: 'Invalid duration' });
+
+    const r = await pool.query(`
+      INSERT INTO orders (tg_id, tg_username, duration, price, status, created)
+      VALUES ($1, $2, $3, $4, 'pending', $5) RETURNING id
+    `, [tgId, tgUsername || '', duration, PRICES[duration], Date.now()]);
+
+    res.json({ ok: true, orderId: r.rows[0].id, price: PRICES[duration] });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Ошибка' });
+  }
+});
+
+// Одобрить заказ (админ)
+app.post('/api/bot/order/:id/approve', async (req, res) => {
+  try {
+    const { secret, key } = req.body || {};
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+
+    await pool.query(
+      "UPDATE orders SET status='paid', key_value=$1, paid_at=$2 WHERE id=$3",
+      [key, Date.now(), req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Сохранить отзыв
+app.post('/api/bot/review', async (req, res) => {
+  try {
+    const { secret, tgId, tgUsername, text, rating } = req.body || {};
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+    if (!text) return res.status(400).json({ error: 'Пустой отзыв' });
+
+    await pool.query(`
+      INSERT INTO reviews (tg_id, tg_username, text, rating, created)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [tgId, tgUsername || '', text, rating || 5, Date.now()]);
+
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Список отзывов
+app.get('/api/bot/reviews', async (req, res) => {
+  try {
+    const { secret } = req.query;
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+
+    const r = await pool.query('SELECT tg_username, text, rating, created FROM reviews ORDER BY created DESC LIMIT 20');
+    res.json({ ok: true, reviews: r.rows });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Статистика бота
+app.get('/api/bot/stats', async (req, res) => {
+  try {
+    const { secret } = req.query;
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+
+    const total   = +(await pool.query("SELECT COUNT(*) AS c FROM orders WHERE status='paid'")).rows[0].c;
+    const pending = +(await pool.query("SELECT COUNT(*) AS c FROM orders WHERE status='pending'")).rows[0].c;
+    const revenue = +(await pool.query("SELECT COALESCE(SUM(price),0) AS s FROM orders WHERE status='paid'")).rows[0].s;
+    const botKeys = +(await pool.query("SELECT COUNT(*) AS c FROM keys WHERE owner='BOT'")).rows[0].c;
+
+    res.json({ ok: true, total, pending, revenue, botKeys });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// Список заказов
+app.get('/api/bot/orders', async (req, res) => {
+  try {
+    const { secret } = req.query;
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+
+    const r = await pool.query('SELECT * FROM orders ORDER BY created DESC LIMIT 50');
+    res.json({ ok: true, orders: r.rows });
+  } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// ============================================================
 app.listen(PORT, () => {
   console.log(`[ManifestTools] http://localhost:${PORT}`);
+  console.log(`[ManifestTools] Bot API ready`);
 });
