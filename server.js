@@ -2,7 +2,6 @@
 // ManifestTools — Key Server + Bot API (PostgreSQL)
 // Rocket Way // 20.05.2026
 // Login: Manifest / mama22112012
-// Bot: @... (BOT_SECRET)
 // ============================================================
 
 const express = require('express');
@@ -186,7 +185,6 @@ function cleanCustomKey(k) {
   return s;
 }
 
-// Генерация ключа (твоя — вручную в панели)
 app.post('/api/generate', async (req, res) => {
   try {
     const { username, count, duration, tier, mode, customKey } = req.body || {};
@@ -299,7 +297,7 @@ app.post('/api/check', async (req, res) => {
 });
 
 // ============================================================
-// КЛЮЧИ
+// КЛЮЧИ (с фильтром)
 // ============================================================
 app.get('/api/keys', async (req, res) => {
   try {
@@ -311,7 +309,6 @@ app.get('/api/keys', async (req, res) => {
     let query, params;
 
     if (user.role === 'admin') {
-      // Админ видит всё, но может фильтровать
       if (filter === 'mine') {
         query = 'SELECT * FROM keys WHERE owner=$1 ORDER BY created DESC';
         params = [username];
@@ -645,7 +642,7 @@ app.post('/api/config/reset', async (req, res) => {
 });
 
 // ============================================================
-// BOT API — для Telegram-бота
+// BOT API
 // ============================================================
 
 // Генерация ключа от бота (owner="BOT")
@@ -700,7 +697,7 @@ app.post('/api/bot/order', async (req, res) => {
   }
 });
 
-// Одобрить заказ (админ)
+// Одобрить заказ
 app.post('/api/bot/order/:id/approve', async (req, res) => {
   try {
     const { secret, key } = req.body || {};
@@ -765,6 +762,30 @@ app.get('/api/bot/orders', async (req, res) => {
     const r = await pool.query('SELECT * FROM orders ORDER BY created DESC LIMIT 50');
     res.json({ ok: true, orders: r.rows });
   } catch (e) { res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// ⭐ МОИ КЛЮЧИ (по tg_id)
+app.get('/api/bot/mykeys', async (req, res) => {
+  try {
+    const { secret, tgId } = req.query;
+    if (secret !== BOT_SECRET) return res.status(403).json({ error: 'Invalid secret' });
+    if (!tgId) return res.status(400).json({ error: 'tgId обязателен' });
+
+    const r = await pool.query(`
+      SELECT o.id, o.duration, o.price, o.key_value, o.status, o.created, o.paid_at,
+             k.used, k.expires, k.hwid
+      FROM orders o
+      LEFT JOIN keys k ON k.key_value = o.key_value
+      WHERE o.tg_id = $1 AND o.status = 'paid'
+      ORDER BY o.paid_at DESC
+      LIMIT 50
+    `, [tgId]);
+
+    res.json({ ok: true, keys: r.rows });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Ошибка' });
+  }
 });
 
 // ============================================================
